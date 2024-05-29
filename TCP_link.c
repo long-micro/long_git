@@ -4,13 +4,21 @@
 #include <netinet/tcp.h>
 #include <netinet/if_ether.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 
 #define ack_syn 0x12
 
-static void iphead_init(struct iphdr *iphead,const char *ip_src, const char *ip_dst)
+struct ip_msg {
+    char *addr_src;
+    char *addr_dst;
+    int port_src;
+    int port_dst;
+};
+
+static void iphead_init(struct iphdr *iphead,struct ip_msg ip_msg)
 {
     iphead->version = 4;
     iphead->ihl = 5;
@@ -20,15 +28,15 @@ static void iphead_init(struct iphdr *iphead,const char *ip_src, const char *ip_
     iphead->frag_off = 0;
     iphead->ttl = 64;
     iphead->protocol = IPPROTO_TCP;
-    iphead->saddr = inet_addr(ip_src);
-    iphead->daddr = inet_addr(ip_dst);
+    iphead->saddr = inet_addr(ip_msg.addr_src);
+    iphead->daddr = inet_addr(ip_msg.addr_dst);
     iphead->check = 0;
 }
 
-static void tcp_init(struct tcphdr *tcphead, int port_src, int port_dst)
+static void tcp_init(struct tcphdr *tcphead, struct ip_msg ip_msg)
 {
-    tcphead->source = htons(port_src);
-    tcphead->dest = htons(port_dst);
+    tcphead->source = htons(ip_msg.port_src);
+    tcphead->dest = htons(ip_msg.port_dst);
     tcphead->seq = htonl(1);
     tcphead->ack_seq= htonl(0);
     tcphead->doff = sizeof(struct tcphdr) / 4;
@@ -36,25 +44,24 @@ static void tcp_init(struct tcphdr *tcphead, int port_src, int port_dst)
     tcphead->check = 0;
 }
 
-static void communicate_init(struct sockaddr_in *server_addr, const char *ip_dst, int port_dst)
+static void communicate_init(struct sockaddr_in *server_addr, struct ip_msg ip_msg, struct iphdr *iphead, struct tcphdr *tcphead)
 {
     server_addr->sin_family = AF_INET;
-    server_addr->sin_addr.s_addr = inet_addr(ip_dst);
-    server_addr->sin_port = htons(port_dst);
+    server_addr->sin_addr.s_addr = inet_addr(ip_msg.addr_dst);
+    server_addr->sin_port = htons(ip_msg.port_dst);
+
+    iphead_init(iphead, ip_msg);
+    tcp_init(tcphead, ip_msg);
 }
 
-static uint8_t get_protocol_type(uint8_t *packet)
+static inline uint8_t get_protocol_type(uint8_t *packet)
 {
-    uint8_t protocol_type = *(packet + 9);
-
-    return protocol_type;
+    return *(packet + 9);
 }
 
-static uint8_t get_ctl_type(uint8_t *packet)
+static inline uint8_t get_ctl_type(uint8_t *packet)
 {
-    uint8_t ctl_type = *(packet + 33) & 0x3F;
-
-    return ctl_type;
+    return *(packet + 33) & 0x3F;
 }
 
 static void syn_msg(struct tcphdr *tcphead)
@@ -83,15 +90,22 @@ static void ack_msg(struct tcphdr *tcphead, uint8_t *recv_packet)
     tcphead->ack_seq= htonl(htonl(recv_seq) + 1);
 }
 
-int main (int argv, char *argc[])
+static bool check_msg(uint8_t *recv_packet)
+{
+    uint8_t protocol_type = get_protocol_type(recv_packet);
+    if (IPPROTO_TCP == protocol_type) {
+        uint8_t ctl_type = get_ctl_type(recv_packet);
+        if (ack_syn == ctl_type) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+static int socket_init()
 {
     int sockfd = 0;
-    uint8_t send_packet[1024] = {0};
-    uint8_t recv_packet[1024] = {0};
-    struct iphdr *iphead = (struct iphdr *)send_packet;
-    struct tcphdr *tcphead = (struct tcphdr *)(send_packet + sizeof(struct iphdr));
-    struct sockaddr_in server_addr = {0};
-
     sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
     if (sockfd < 0) {
         printf("socket error, err(%d:%s)\n", errno, strerror(errno));
@@ -101,48 +115,54 @@ int main (int argv, char *argc[])
     int optval = 1;
     int seted = setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &optval, sizeof(optval));
     if (seted < 0) {
-        close(sockfd);
+        (void)close(sockfd);
         printf("setsockopt error, err(%d:%s)\n", errno, strerror(errno));
         return -1;
     }
 
-    iphead_init(iphead, "172.31.159.18", "39.156.66.18");
-    tcp_init(tcphead, 7777, 80);
-    communicate_init(&server_addr, "39.156.66.18", 80);
+    return sockfd;
+}
+
+int main (int argv, char *argc[])
+{
+    int sockfd = 0;
+    uint8_t send_packet[1024] = {0};
+    uint8_t recv_packet[1024] = {0};
+    struct iphdr *iphead = (struct iphdr *)send_packet;
+    struct tcphdr *tcphead = (struct tcphdr *)(send_packet + sizeof(struct iphdr));
+    struct sockaddr_in server_addr = {0};
+
+    sockfd = socket_init();
+
+    struct ip_msg ip_msg = {"172.31.159.18", "39.156.66.18", 7777, 80};
+    communicate_init(&server_addr, ip_msg, iphead, tcphead);
 
     syn_msg(tcphead);
-    int sended_ack = sendto(sockfd, send_packet, iphead->tot_len, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
-    if (sended_ack < 0) {
-        close(sockfd);
+    int sended_syn = sendto(sockfd, send_packet, iphead->tot_len, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    if (sended_syn < 0) {
+        (void)close(sockfd);
         printf("send error, err(%d:%s)\n", errno, strerror(errno));
         return -1;
     }
 
-    while (1) {
-        recvfrom(sockfd, recv_packet, iphead->tot_len, 0, NULL, NULL);
-        uint8_t protocol_type = get_protocol_type(recv_packet);
-        if (IPPROTO_TCP == protocol_type) {
-            uint8_t ctl_type = get_ctl_type(recv_packet);
-            if (ack_syn == ctl_type) {
-                ack_msg(tcphead, recv_packet);
-                int sended_msg = sendto(sockfd, send_packet, iphead->tot_len, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
-                if (sended_msg < 0) {
-                    close(sockfd);
-                    printf("send error, err(%d:%s)\n", errno, strerror(errno));
-                    return -1;
-                }
-                break;
-            }
-            else {
-                continue;
-            }
-        }
-        else {
-            continue;
+    for (bool checked = check_msg(recv_packet); true != checked; checked = check_msg(recv_packet)) {
+        int recved = recvfrom(sockfd, recv_packet, iphead->tot_len, 0, NULL, NULL);
+        if (recved < 0) {
+            (void)close(sockfd);
+            printf("send error, err(%d:%s)\n", errno, strerror(errno));
+            return -1;
         }
     }
 
-    close(sockfd);
+    ack_msg(tcphead, recv_packet);
+    int sended_ack = sendto(sockfd, send_packet, iphead->tot_len, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    if (sended_ack < 0) {
+        (void)close(sockfd);
+        printf("send error, err(%d:%s)\n", errno, strerror(errno));
+        return -1;
+    }
+
+    (void)close(sockfd);
 
     return 0;
 }
