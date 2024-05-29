@@ -39,7 +39,8 @@ static void dir_push(char *fpath)
         dir_max = dir_index + 2;
         dir_storage = realloc(dir_storage, dir_max * sizeof(char *));
         if (NULL == dir_storage) {
-            perror("dir_storage realloc error\n");
+            printf("realloc error, err(%d:%s)\n", errno, strerror(errno));
+            return;
         }            
     }
 
@@ -51,20 +52,20 @@ static void create_msg(struct file_msg *inotify_msg)
     struct stat file_tpye = {0};        //获取文件类型等信息
     (void)lstat(inotify_msg->fpath, &file_tpye);
 
-    strcpy(inotify_msg->action, "create");
+    strncpy(inotify_msg->action, "create", 6);
 
     if (1 == S_ISDIR(file_tpye.st_mode)) {
-        strcpy(inotify_msg->ftype, "dir");
+        strncpy(inotify_msg->ftype, "dir", 3);
         
         inotify_add_watch(fd, inotify_msg->fpath, IN_DELETE | IN_CREATE | IN_MODIFY | IN_MOVE);
         dir_push(inotify_msg->fpath);
     }
     else if (1 == S_ISLNK(file_tpye.st_mode)) {
-        strcpy(inotify_msg->ftype, "link");
+        strncpy(inotify_msg->ftype, "link", 4);
         (void)readlink(inotify_msg->fpath, inotify_msg->fdata.data, sizeof(inotify_msg->fdata.data));    
     }
     else {
-        strcpy(inotify_msg->ftype, "regular");
+        strncpy(inotify_msg->ftype, "regular", 7);
     }
 }
 
@@ -73,13 +74,13 @@ static void delete_msg(struct file_msg *inotify_msg)
     struct stat file_tpye = {0};        //获取文件类型等信息
     (void)lstat(inotify_msg->fpath, &file_tpye);
 
-    strcpy(inotify_msg->action, "delete");
+    strncpy(inotify_msg->action, "delete", 6);
 
     if (1 == S_ISDIR(file_tpye.st_mode)) {
-        strcpy(inotify_msg->ftype, "dir");
+        strncpy(inotify_msg->ftype, "dir", 3);
     }
     else {
-        strcpy(inotify_msg->ftype, "regular");
+        strncpy(inotify_msg->ftype, "regular", 6);
     }
 }
 
@@ -88,14 +89,14 @@ static void modify_msg(struct file_msg *inotify_msg)
     struct stat file_tpye = {0};        //获取文件类型等信息
     (void)lstat(inotify_msg->fpath, &file_tpye);
 
-    strcpy(inotify_msg->action, "modify"); 
+    strncpy(inotify_msg->action, "modify", 6); 
 
     if (1 == S_ISREG(file_tpye.st_mode)){
-        strcpy(inotify_msg->ftype, "regular");
+        strncpy(inotify_msg->ftype, "regular", 7);
     }
 }
 
-static void *sever_link(const char *ip_addr, const char *ip_port)
+static void *sever_link(const char *ip_addr, int ip_port)
 {
     /*连接*/
     static int sockfd[2] = {0};
@@ -104,30 +105,33 @@ static void *sever_link(const char *ip_addr, const char *ip_port)
 
     addr.sin_family = AF_INET;         //IPV4标识符
     addr.sin_addr.s_addr = inet_addr(ip_addr);      //十进制点分IP地址转换为网络字节序
-    addr.sin_port = htons(atoi(ip_port));       //主机字节序转化为网络字节序
+    addr.sin_port = htons(ip_port);       //主机字节序转化为网络字节序
 
     sockfd[0] = socket(AF_INET, SOCK_STREAM, 0);        //打开套接字
     if (sockfd[0] < 0) {
-        perror("socket error\n");
-        printf("error code: %d\n",errno);
+        printf("socket error, err(%d:%s)\n", errno, strerror(errno));
+        return;
     }
 
-    int bind_flag = bind(sockfd[0], (struct sockaddr *)&addr, addrlen);        //绑定ip地址和端口
-    if (bind_flag < 0) {
-        perror("bind error\n");
-        printf("error code: %d\n",errno);
+    int binded = bind(sockfd[0], (struct sockaddr *)&addr, addrlen);        //绑定ip地址和端口
+    if (binded < 0) {
+        (void)close(sockfd[0]);
+        printf("bind error, err(%d:%s)\n", errno, strerror(errno));
+        return;
     }
 
-    int listen_flag = listen(sockfd[0], 5);     //将一个套接字从主动连接模式转换为被动监听模式
-	if (listen_flag < 0) {      
-		perror("listen error\n");
-        printf("error code: %d\n",errno);
+    int listened = listen(sockfd[0], 5);     //将一个套接字从主动连接模式转换为被动监听模式
+	if (listened < 0) {    
+        (void)close(sockfd[0]);  
+		printf("listen error, err(%d:%s)\n", errno, strerror(errno));
+        return;
 	}
     
     sockfd[1] = accept(sockfd[0], NULL, NULL);      //阻塞等待客户端的连接请求,后面两个参数设置为NULL表示不关注客户端发送的信息，不影响连接
     if (sockfd[1] < 0) {
-        perror("accept error\n");
-        printf("error code: %d\n",errno);
+        (void)close(sockfd[0]);
+        printf("accept error, err(%d:%s)\n", errno, strerror(errno));
+        return;
     }
 
     return &sockfd;
@@ -135,9 +139,11 @@ static void *sever_link(const char *ip_addr, const char *ip_port)
 
 static void sever_send(int sockfd, void *inotify_msg)
 {
-    int send_flag = send(sockfd, (char *)inotify_msg, sizeof(struct file_msg), 0);
-    if (send_flag < 0) {
-        perror("send error\n");
+    int sended = send(sockfd, (char *)inotify_msg, sizeof(struct file_msg), 0);
+    if (sended < 0) {
+        (void)close(sockfd);
+        printf("send error, err(%d:%s)\n", errno, strerror(errno));
+        return;
     }
 }
 
@@ -147,8 +153,7 @@ static void send_file_data(struct file_msg fmsg)
 
     file = fopen(fmsg.fpath, "r");   //打开文件
     if (NULL == file) {
-        perror("regular fail open\n");
-        printf("Error code: %d\n", errno);
+        printf("fopen error, err(%d:%s)\n", errno, strerror(errno));
         return;
     }
     
@@ -157,10 +162,12 @@ static void send_file_data(struct file_msg fmsg)
 
         rd_num = fread(fmsg.fdata.data, sizeof(char), sizeof(fmsg.fdata.data), file);
         if (0 != ferror(file)) {
-            perror("read error\n");
+            (void)fclose(file);
+            printf("fread error, err(%d:%s)\n", errno, strerror(errno));
+            return;
         }
 
-        strcpy(fmsg.fdata.is_data, "yes");;
+        strncpy(fmsg.fdata.is_data, "yes", 3);;
         sever_send(sockfd[1], &fmsg);       //发送到客户端
         memset(fmsg.fdata.data, 0, sizeof(fmsg.fdata.data));
         memset(fmsg.fdata.is_data, 0, sizeof(fmsg.fdata.is_data));
@@ -210,8 +217,8 @@ static void event_read()
 
     length = read(fd, buff, EVENT_BUF_LEN);     //读取事件总长度
     if (length < 0) {
-        perror("read error\n");
-        printf("error code: %d\n", errno);
+        (void)close(fd);
+        printf("read error, err(%d:%s)\n", errno, strerror(errno));
         return;
     }
 
@@ -222,8 +229,8 @@ static void event_read()
             inotify_msg = getmsg(event);     //获取监控到的事件内容并且存储到结构体中
             sever_send(sockfd[1], inotify_msg);        //发送监控到的事件数据结构体
             
-            int cmp_type = strcmp(inotify_msg->ftype, "regular");
-            int cmp_del = strcmp(inotify_msg->action, "delete");
+            int cmp_type = strncmp(inotify_msg->ftype, "regular", 7);
+            int cmp_del = strncmp(inotify_msg->action, "delete", 6);
             if ((0 == cmp_type) && (0 != cmp_del)) {
                 send_file_data(*inotify_msg);    //发送文件内容
             }               
@@ -237,8 +244,9 @@ static void dir_inotify(char **dir_storage)
 {
     fd = inotify_init();        //初始化
     if (fd < 0) {
-        perror("inotify_init error\n");
-        printf("error code: %d\n", errno);
+        (void)close(fd);
+        printf("inotify_init error, err(%d:%s)\n", errno, strerror(errno));
+        return;
     }
     
     int wd = 0;
@@ -257,23 +265,23 @@ static int callback(const char *fpath, struct stat *statbuff, int typeflag)     
     memset(&allfile_msg, 0, sizeof(struct file_msg));
 
     strcpy(allfile_msg.fpath, fpath);       //存储所有文件绝对路径 
-    strcpy(allfile_msg.action, "create");
+    strncpy(allfile_msg.action, "create", 6);
 
     lstat(fpath, statbuff);     //获取文件信息
 
     if (S_ISDIR(statbuff->st_mode)) {
-        strcpy(allfile_msg.ftype, "dir");       
+        strncpy(allfile_msg.ftype, "dir", 3);       
     }
     else if (S_ISLNK(statbuff->st_mode)) {
-        strcpy(allfile_msg.ftype, "link");
+        strncpy(allfile_msg.ftype, "link", 4);
         (void)readlink(fpath, allfile_msg.fdata.data, sizeof(allfile_msg.fdata.data));       
     }
     else {
-        strcpy(allfile_msg.ftype, "regular");       
+        strncpy(allfile_msg.ftype, "regular", 7);       
     }
 
     sever_send(sockfd[1], &allfile_msg);
-    if (0 == strcmp(allfile_msg.ftype, "regular")) {
+    if (0 == strncmp(allfile_msg.ftype, "regular", 7)) {
         send_file_data(allfile_msg);    //发送文件内容
     }
 
@@ -287,16 +295,18 @@ static int callback(const char *fpath, struct stat *statbuff, int typeflag)     
 
 int main(int argc, char *argv[])
 {   
-    sockfd = sever_link("172.31.159.18", "7777");
+    sockfd = sever_link("172.31.159.18", 7777);
 
     dir_storage = (char **)malloc(dir_max * sizeof(char *));        //为指针数组分配指针的指针
     if (NULL == dir_storage) {
-        perror("dir_storage malloc error\n");
+        printf("dir_storage malloc error, err(%d:%s)\n", errno, strerror(errno));
+        return -1;
     }
 
-    int ftw_flag = ftw("/home/long/dir0", callback, 10);        //遍历目录
-    if (0 != ftw_flag) {
-        perror("ftw error\n");
+    int ftwed = ftw("/home/long/dir0", callback, 10);        //遍历目录
+    if (0 != ftwed) {
+        printf("ftw error, err(%d:%s)\n", errno, strerror(errno));
+        return -1;
     }
 
     dir_inotify(dir_storage);
@@ -304,6 +314,7 @@ int main(int argc, char *argv[])
     for (int i = 0; i < dir_max; i++) {     // 释放内存
         free(dir_storage[i]); // 释放 dir_msg 结构中的字符串
     }
+    
     free(dir_storage); // 释放 dir_storage 数组
 
     sever_close(sockfd);

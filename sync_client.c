@@ -29,13 +29,12 @@ char **path_storage = NULL;
 
 static void write_file(struct file_msg fmsg)
 {  
-    if (0 == strcmp(fmsg.fdata.is_data, "yes")) {
+    if (0 == strncmp(fmsg.fdata.is_data, "yes", 3)) {
         FILE *file =  NULL;
 
         file = fopen(fmsg.fpath, "a");   //打开文件
         if (NULL == file) {
-            perror("file_csr fail open\n");
-            printf("Error code: %d\n", errno);
+            printf("fopen error, err(%d:%s)\n", errno, strerror(errno));
             return;
         }
         
@@ -43,7 +42,9 @@ static void write_file(struct file_msg fmsg)
         fwrite(fmsg.fdata.data, sizeof(char), sizeof(fmsg.fdata.data), file);
         printf("%s\n", fmsg.fdata.data);
         if (0 != ferror(file)) {
-            perror("write error");
+            (void)fclose(file);
+            printf("fwrite error, err(%d:%s)\n", errno, strerror(errno));
+            return;
         }
 
         (void)fclose(file);   //关闭文件
@@ -57,7 +58,8 @@ static int callback(const char *fpath, struct stat *statbuff, int typeflag)     
         dir_max = dir_index + 2;
         path_storage = realloc(path_storage, dir_max * sizeof(char *));
         if (NULL == path_storage) {
-            perror("path_storage realloc error\n");
+            printf("path_storage realloc error, err(%d:%s)\n", errno, strerror(errno));
+            return -1;
         }            
     }
 
@@ -69,16 +71,18 @@ static int callback(const char *fpath, struct stat *statbuff, int typeflag)     
 
 static void removedir(char *path)
 {
-    int rm_flag = rmdir("/home/long/dir1");   //删除空文件夹
-    if (0 != rm_flag) {
+    int rmed = rmdir("/home/long/dir1");   //删除空文件夹
+    if (0 != rmed) {
         path_storage = (char **)malloc(dir_max * sizeof(char *));        //为指针数组分配指针的指针
         if (NULL == path_storage) {
-            perror("path_storage malloc error\n");
+            printf("path_storage malloc error, err(%d:%s)\n", errno, strerror(errno));
+            return;
         }  
 
-        int ftw_flag = ftw("/home/long/dir1", callback, 10);        //遍历目录
-        if (0 != ftw_flag) {
-            perror("ftw error\n");
+        int ftwed = ftw("/home/long/dir1", callback, 10);        //遍历目录
+        if (0 != ftwed) {
+            printf("ftw error, err(%d:%s)\n", errno, strerror(errno));
+            return;
         }
 
         for (int i = dir_index - 1; i >= 0; i--) {
@@ -103,17 +107,17 @@ static void removedir(char *path)
 static void sync_create(struct file_msg fmsg)
 {
     printf("%s\n", fmsg.fpath);
-    if (0 == strcmp(fmsg.ftype, "dir")) {
+    if (0 == strncmp(fmsg.ftype, "dir", 3)) {
         (void)mkdir(fmsg.fpath, 0777);
     }
-    else if (0 == strcmp(fmsg.ftype, "link")) {
-        int symlink_flag = symlink(fmsg.fdata.data, fmsg.fpath);
-        if (symlink_flag < 0) {
-            perror("symlink error\n");
-            printf("error code: %d\n", errno);
+    else if (0 == strncmp(fmsg.ftype, "link", 4)) {
+        int symlinked = symlink(fmsg.fdata.data, fmsg.fpath);
+        if (symlinked < 0) {
+            printf("symlink error, err(%d:%s)\n", errno, strerror(errno));
+            return;
         }
     }
-    else if (0 == strcmp(fmsg.ftype, "regular")) {
+    else if (0 == strncmp(fmsg.ftype, "regular", 7)) {
         printf("create regular\n");
         write_file(fmsg);
     }
@@ -121,7 +125,7 @@ static void sync_create(struct file_msg fmsg)
 
 static void sync_delete(struct file_msg fmsg)
 {
-    if (0 == strcmp(fmsg.ftype, "dir")) {
+    if (0 == strncmp(fmsg.ftype, "dir", 3)) {
         (void)rmdir(fmsg.fpath); 
     }
     else {
@@ -131,7 +135,7 @@ static void sync_delete(struct file_msg fmsg)
 
 static void sync_modify(struct file_msg fmsg)
 {
-    if (0 == strcmp(fmsg.ftype, "regular")) {
+    if (0 == strncmp(fmsg.ftype, "regular", 7)) {
         (void)remove(fmsg.fpath);   //删除文件
         write_file(fmsg);   //重新创建
     }
@@ -144,16 +148,16 @@ static void sync_rename(struct file_msg fmsg)
 
 static void sync_all(struct file_msg fmsg)
 {
-    if (0 == strcmp(fmsg.action, "create")) {
+    if (0 == strncmp(fmsg.action, "create", 6)) {
         sync_create(fmsg);
     }
-    else if (0 == strcmp(fmsg.action, "delete")) {
+    else if (0 == strncmp(fmsg.action, "delete", 6)) {
         sync_delete(fmsg);
     }
-    else if (0 == strcmp(fmsg.action, "modify")) {
+    else if (0 == strncmp(fmsg.action, "modify", 6)) {
         sync_modify(fmsg);
     }
-    else if (0 == strcmp(fmsg.action, "rename")) {
+    else if (0 == strncmp(fmsg.action, "rename", 6)) {
         sync_rename(fmsg);
     }
 }
@@ -170,14 +174,15 @@ static int sever_link(char *ip_addr, char *ip_port)
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
-        perror("socket error\n");
-        printf("error code: %d\n",errno);
+        printf("socket error, err(%d:%s)\n", errno, strerror(errno));
+        return -1;
     }
 
-    int connect_flag = connect(sockfd, (struct sockadrr *)&addr, addrlen);
-    if (connect_flag < 0) {
-        perror("connect error\n");
-        printf("error code: %d\n",errno);
+    int connected = connect(sockfd, (struct sockadrr *)&addr, addrlen);
+    if (connected < 0) {
+        (void)close(sockfd);
+        printf("connect error, err(%d:%s)\n", errno, strerror(errno));
+        return -1;
     }
 
     return sockfd;
@@ -189,8 +194,7 @@ static void sever_recv(int sockfd)
         size_t bytes = 0;
         bytes = recv(sockfd, (char *)&fmsg, sizeof(struct file_msg), 0);
         if (bytes  < 0) {
-            perror("recv error\n");
-            printf("error code: %d\n", errno);
+            printf("recv error, err(%d:%s)\n", errno, strerror(errno));
             break;
         }
         else if (bytes > 0) {
