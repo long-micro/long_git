@@ -61,6 +61,9 @@ int main (int agv, char *argc[])
     int sockfd = 0;
     
     sockfd = server_init("172.31.159.18", 7777);
+
+    printf("服务器已开启，正在等待接收消息......\n");
+
     recv_msg(sockfd);
 
     (void)close(sockfd);

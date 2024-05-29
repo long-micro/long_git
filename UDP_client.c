@@ -53,6 +53,8 @@ int main (int argv, char *argc[])
 
     sockfd = client_init("172.31.159.18", 7777, &addr_server);
 
+    printf("客户端已开启，请输入消息：\n");
+
     send_msg(sockfd, addr_server);
 
     (void)close(sockfd);
