@@ -38,9 +38,9 @@ static uint8_t *generate_ascii(uint8_t *base64)
 {
     static uint8_t ascii[3];
 
-    ascii[3] = (base64[0] << 2) + (base64[1] >> 4);
-    ascii[3] = (base64[1] << 4) + (base64[2] >> 2);
-    ascii[3] = (base64[2] << 6) + (base64[3]);
+    ascii[0] = (base64[0] << 2) + (base64[1] >> 4);
+    ascii[1] = (base64[1] << 4) + (base64[2] >> 2);
+    ascii[2] = (base64[2] << 6) + (base64[3]);
 
     return ascii;
 }
@@ -113,9 +113,9 @@ static int base64_decode(const char *encrypted, const unsigned int bytes, char *
         }
 
         uint8_t *ascii = generate_ascii(base64);
-        unencrypted[index++] = (base64[0] << 2) + (base64[1] >> 4);
-        unencrypted[index++] = (base64[1] << 4) + (base64[2] >> 2);
-        unencrypted[index++] = (base64[2] << 6) + (base64[3]);
+        unencrypted[index++] = ascii[0];
+        unencrypted[index++] = ascii[1];
+        unencrypted[index++] = ascii[2];
     }
 
     padding_remove(padding_num, unencrypted, index);
